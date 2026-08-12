@@ -2,7 +2,7 @@
  * Google Calendar 자동화 모듈
  */
 
-export interface CalendarEventParams {
+interface CalendarEventParams {
   title: string;
   startTime: Date;
   endTime: Date;
@@ -13,7 +13,7 @@ export interface CalendarEventParams {
 /**
  * 캘린더에 새로운 일정을 등록합니다.
  */
-export function createCalendarEvent(params: CalendarEventParams): GoogleAppsScript.Calendar.CalendarEvent {
+function createCalendarEvent(params: CalendarEventParams): GoogleAppsScript.Calendar.CalendarEvent {
   const calendar = CalendarApp.getDefaultCalendar();
   const event = calendar.createEvent(params.title, params.startTime, params.endTime, {
     description: params.description || '',
@@ -26,7 +26,7 @@ export function createCalendarEvent(params: CalendarEventParams): GoogleAppsScri
 /**
  * 오늘 예정된 캘린더 일정 목록을 조회합니다.
  */
-export function getTodayEvents(): GoogleAppsScript.Calendar.CalendarEvent[] {
+function getTodayEvents(): GoogleAppsScript.Calendar.CalendarEvent[] {
   const calendar = CalendarApp.getDefaultCalendar();
   const today = new Date();
   const events = calendar.getEventsForDay(today);

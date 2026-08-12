@@ -5,7 +5,7 @@
 /**
  * 신규 구글 문서를 생성하고 서식 있는 텍스트를 작성합니다.
  */
-export function createDocumentReport(title: string, sections: { heading: string; body: string }[]): GoogleAppsScript.Document.Document {
+function createDocumentReport(title: string, sections: { heading: string; body: string }[]): GoogleAppsScript.Document.Document {
   const doc = DocumentApp.create(title);
   const body = doc.getBody();
 

@@ -5,7 +5,7 @@
 /**
  * 구글 드라이브 루트 또는 특정 경로에 폴더를 생성하거나 조회합니다.
  */
-export function getOrCreateFolder(folderName: string): GoogleAppsScript.Drive.Folder {
+function getOrCreateFolder(folderName: string): GoogleAppsScript.Drive.Folder {
   const folders = DriveApp.getFoldersByName(folderName);
   if (folders.hasNext()) {
     const existingFolder = folders.next();
@@ -21,7 +21,7 @@ export function getOrCreateFolder(folderName: string): GoogleAppsScript.Drive.Fo
 /**
  * 특정 폴더 안의 파일 목록을 로깅합니다.
  */
-export function listFilesByFolder(folderName: string): string[] {
+function listFilesByFolder(folderName: string): string[] {
   const folder = getOrCreateFolder(folderName);
   const files = folder.getFiles();
   const fileList: string[] = [];

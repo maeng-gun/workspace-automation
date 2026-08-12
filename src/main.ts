@@ -1,9 +1,3 @@
-import { createCalendarEvent, getTodayEvents } from './calendar';
-import { createNewTask } from './tasks';
-import { getOrCreateFolder, listFilesByFolder } from './drive';
-import { createSpreadsheetWithData } from './sheets';
-import { createDocumentReport } from './docs';
-
 /**
  * 1. 구글 캘린더 테스트 함수
  * GAS 에디터의 실행 메뉴에서 직접 실행할 수 있습니다.

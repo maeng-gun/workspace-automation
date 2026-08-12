@@ -5,7 +5,7 @@
 /**
  * 신규 스프레드시트를 생성하고 데이터를 기입합니다.
  */
-export function createSpreadsheetWithData(title: string, headers: string[][], rows: (string | number)[][]): GoogleAppsScript.Spreadsheet.Spreadsheet {
+function createSpreadsheetWithData(title: string, headers: string[][], rows: (string | number)[][]): GoogleAppsScript.Spreadsheet.Spreadsheet {
   const ss = SpreadsheetApp.create(title);
   const sheet = ss.getActiveSheet();
 

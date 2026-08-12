@@ -3,7 +3,7 @@
  * (참고: Tasks 고급 서비스를 사용합니다)
  */
 
-export interface TaskParams {
+interface TaskParams {
   title: string;
   notes?: string;
   dueDate?: Date;
@@ -12,7 +12,7 @@ export interface TaskParams {
 /**
  * 기본 할 일 목록에 새 Task를 추가합니다.
  */
-export function createNewTask(params: TaskParams) {
+function createNewTask(params: TaskParams) {
   // Tasks 고급 서비스가 활성화되어 있어야 합니다 (appsscript.json 확인)
   if (typeof Tasks === 'undefined') {
     Logger.log('[Tasks] Tasks 고급 서비스가 활성화되어 있지 않습니다.');
