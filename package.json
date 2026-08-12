@@ -1,0 +1,26 @@
+{
+  "name": "workspace-automation",
+  "version": "1.0.0",
+  "description": "Google Apps Script automation project for Google Workspace (Calendar, Tasks, Drive, Sheets, Docs)",
+  "main": "dist/main.js",
+  "scripts": {
+    "build": "tsc",
+    "push": "clasp push",
+    "push:watch": "clasp push --watch",
+    "pull": "clasp pull",
+    "open": "clasp open"
+  },
+  "keywords": [
+    "google-apps-script",
+    "clasp",
+    "workspace",
+    "automation"
+  ],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "@google/clasp": "^2.4.2",
+    "@types/google-apps-script": "^1.0.95",
+    "typescript": "^5.4.5"
+  }
+}
