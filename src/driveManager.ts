@@ -5,6 +5,7 @@
  * 탭 구성:
  * 1) [현재 파일] 탭: 전체 파일 목록 생성 대상 (11개 열)
  * 2) [변경 대상] 탭: 일괄 삭제 및 일괄 이동 대상 (17개 열)
+ * 3) [폴더일괄변경] 탭: 폴더 계층 내용물 일괄 이동 및 빈 원본 폴더 삭제 (10개 열)
  */
 
 const DRIVE_MANAGEMENT_SPREADSHEET_ID = '1-MKH0ug-IfN4HdpH5sSrwuq94eXB6pQumfTwFfpWZeo';
@@ -211,6 +212,26 @@ function getOrCreateFolderPath(folderNames: string[]): GoogleAppsScript.Drive.Fo
 }
 
 /**
+ * 지정된 폴더 경로(레벨1~레벨5)를 루트부터 순차 탐색하여 폴더 객체를 찾는 헬퍼 함수
+ * 경로 상에 폴더가 존재하지 않으면 null을 반환합니다.
+ */
+function findFolderByPath(folderNames: string[]): GoogleAppsScript.Drive.Folder | null {
+  const validNames = folderNames.map(n => String(n || '').trim()).filter(n => n !== '');
+  if (validNames.length === 0) return null;
+
+  let currentFolder = DriveApp.getRootFolder();
+  for (const name of validNames) {
+    const subFolders = currentFolder.getFoldersByName(name);
+    if (!subFolders.hasNext()) {
+      Logger.log(`[DriveManager] 폴더를 찾을 수 없음: ${name} (경로: ${validNames.join('/')})`);
+      return null;
+    }
+    currentFolder = subFolders.next();
+  }
+  return currentFolder;
+}
+
+/**
  * 3. 일괄 이동 기능
  * 대상 탭: [변경 대상] (LV1~LV5 지정 폴더로 이동)
  */
@@ -282,4 +303,206 @@ function moveDriveFiles() {
   SpreadsheetApp.flush();
   ss.toast(`✅ 총 ${movedCount}개 파일이 지정된 폴더로 이동되었습니다.`, '일괄 이동 완료');
   Logger.log(`[DriveManager] 일괄 이동 완료: ${movedCount}건`);
+}
+
+/**
+ * 4. 폴더 일괄 변경 및 삭제 기능
+ * 대상 탭: [폴더일괄변경]
+ * - Col 1~5: 레벨1 ~ 레벨5 (현재 폴더 계층)
+ * - Col 6~10: LV1 ~ LV5 (이동할 폴더 계층)
+ * - 삭제여부 열: 1 입력 시 해당 폴더 계층 및 하위 파일/폴더 전체 삭제
+ * 
+ * 동작:
+ * 1) [삭제여부 == '1']인 경우:
+ *    - 레벨1~레벨5 경로의 폴더(하위 파일 및 서브폴더 전체 포함)를 휴지통으로 이동
+ *    - 삭제여부 열을 '삭제완료'로 변경
+ * 2) [삭제여부 != '1']인 경우 (이동):
+ *    - 레벨1~레벨5 경로의 원본 폴더를 탐색
+ *    - LV1~LV5 경로의 대상 폴더를 탐색 (없으면 자동 생성)
+ *    - 원본 폴더 내의 모든 파일과 하위 폴더들을 대상 폴더로 일괄 이동
+ *    - 내용물이 비워진 원본 폴더(마지막 계층 폴더)를 휴지통으로 이동(삭제)
+ *    - 시트의 레벨1~5 갱신, LV1~5 초기화, 처리 결과 기록
+ */
+function batchMoveFolders() {
+  const ss = getTargetSpreadsheet();
+  const sheet = ss.getSheetByName('폴더일괄변경');
+
+  if (!sheet) {
+    ss.toast('⚠️ [폴더일괄변경] 탭을 찾을 수 없습니다.', '폴더 일괄 변경 오류');
+    Logger.log('[DriveManager] [폴더일괄변경] 탭이 존재하지 않습니다.');
+    return;
+  }
+
+  const lastRow = sheet.getLastRow();
+  if (lastRow <= 1) {
+    ss.toast('ℹ️ [폴더일괄변경] 탭에 처리할 데이터가 없습니다.', '폴더 일괄 변경');
+    return;
+  }
+
+  const lastCol = Math.max(sheet.getLastColumn(), 12);
+  const headers = sheet.getRange(1, 1, 1, lastCol).getValues()[0].map(h => String(h || '').trim());
+
+  // '삭제여부' 열 인덱스 확인 (0-based)
+  let deleteColIdx = headers.indexOf('삭제여부');
+  if (deleteColIdx === -1) {
+    deleteColIdx = 10; // 기본 11번째 열 (Col 11)
+  }
+
+  // '처리 결과' 열 인덱스 확인 및 헤더 생성
+  let resultColIdx = headers.findIndex(h => h.includes('결과') || h.includes('상태'));
+  if (resultColIdx === -1) {
+    resultColIdx = Math.max(deleteColIdx + 1, 11);
+    sheet.getRange(1, resultColIdx + 1).setValue('처리 결과').setFontWeight('bold').setBackground('#e6f2ff');
+  }
+
+  const totalCols = Math.max(lastCol, resultColIdx + 1);
+  const range = sheet.getRange(2, 1, lastRow - 1, totalCols);
+  const values = range.getValues();
+
+  let movedFolderCount = 0;
+  let deletedFolderCount = 0;
+  let totalMovedFiles = 0;
+  let totalMovedFolders = 0;
+
+  for (let i = 0; i < values.length; i++) {
+    const row = values[i];
+
+    // 현재 레벨 1~5 (Col 1~5)
+    const sourceLevels = [row[0], row[1], row[2], row[3], row[4]]
+      .map(v => String(v || '').trim())
+      .filter(v => v !== '');
+
+    // 목표 레벨 LV1~LV5 (Col 6~10)
+    const targetLevels = [row[5], row[6], row[7], row[8], row[9]]
+      .map(v => String(v || '').trim())
+      .filter(v => v !== '');
+
+    // 삭제여부 값 확인
+    const deleteFlag = String(row[deleteColIdx] || '').trim();
+
+    // 레벨이 비어있으면 스킵
+    if (sourceLevels.length === 0) {
+      continue;
+    }
+
+    // ==========================================
+    // 1. [폴더 전체 삭제 모드] (삭제여부 == '1')
+    // ==========================================
+    if (deleteFlag === '1') {
+      try {
+        const sourceFolder = findFolderByPath(sourceLevels);
+        if (!sourceFolder) {
+          sheet.getRange(i + 2, resultColIdx + 1).setValue('오류: 원본 폴더를 찾을 수 없음');
+          Logger.log(`[DriveManager] 삭제 대상 폴더 없음: ${sourceLevels.join('/')}`);
+          continue;
+        }
+
+        // 폴더 자체를 휴지통으로 이동 (폴더 자신 및 하위 파일/서브폴더 전체 삭제)
+        sourceFolder.setTrashed(true);
+        deletedFolderCount++;
+
+        // 시트 상태 갱신
+        sheet.getRange(i + 2, deleteColIdx + 1).setValue('삭제완료');
+        sheet.getRange(i + 2, resultColIdx + 1).setValue('✅ 폴더 및 하위 항목 전체 삭제 완료');
+
+        Logger.log(`[DriveManager] 폴더 일괄 삭제 성공: ${sourceLevels.join('/')}`);
+      } catch (e) {
+        Logger.log(`[DriveManager] 폴더 삭제 실패 (${sourceLevels.join('/')}): ${e}`);
+        sheet.getRange(i + 2, resultColIdx + 1).setValue(`오류: ${e}`);
+      }
+      continue;
+    }
+
+    // ==========================================
+    // 2. [폴더 내용물 이동 모드]
+    // ==========================================
+    if (targetLevels.length === 0) {
+      continue;
+    }
+
+    // 동일 경로인 경우 스킵
+    if (sourceLevels.join('/') === targetLevels.join('/')) {
+      sheet.getRange(i + 2, resultColIdx + 1).setValue('동일 경로 (스킵)');
+      continue;
+    }
+
+    try {
+      // 1. 원본 폴더 탐색
+      const sourceFolder = findFolderByPath(sourceLevels);
+      if (!sourceFolder) {
+        sheet.getRange(i + 2, resultColIdx + 1).setValue('오류: 원본 폴더를 찾을 수 없음');
+        Logger.log(`[DriveManager] 원본 폴더 없음: ${sourceLevels.join('/')}`);
+        continue;
+      }
+
+      // 2. 대상 폴더 탐색 또는 생성
+      const targetFolder = getOrCreateFolderPath(targetLevels);
+
+      // 원본 폴더와 대상 폴더가 동일한 경우 스킵
+      if (sourceFolder.getId() === targetFolder.getId()) {
+        sheet.getRange(i + 2, resultColIdx + 1).setValue('동일 폴더 ID (스킵)');
+        continue;
+      }
+
+      // 3. 원본 폴더 내 직하위 파일들을 대상 폴더로 이동
+      let fileCount = 0;
+      const files = sourceFolder.getFiles();
+      while (files.hasNext()) {
+        const file = files.next();
+        file.moveTo(targetFolder);
+        fileCount++;
+      }
+
+      // 4. 원본 폴더 내 직하위 폴더들을 대상 폴더로 이동
+      let folderCount = 0;
+      const subFolders = sourceFolder.getFolders();
+      while (subFolders.hasNext()) {
+        const subFolder = subFolders.next();
+        // 대상 폴더 자체나 동일 폴더 이동 방지
+        if (subFolder.getId() === targetFolder.getId()) continue;
+        subFolder.moveTo(targetFolder);
+        folderCount++;
+      }
+
+      // 5. 내용물이 모두 이동된 원본 폴더 휴지통으로 이동 (삭제)
+      sourceFolder.setTrashed(true);
+
+      // 6. 시트 행 갱신
+      const newLevels = [
+        targetLevels[0] || '',
+        targetLevels[1] || '',
+        targetLevels[2] || '',
+        targetLevels[3] || '',
+        targetLevels[4] || ''
+      ];
+      // 레벨1~5 갱신
+      sheet.getRange(i + 2, 1, 1, 5).setValues([newLevels]);
+      // LV1~5 초기화
+      sheet.getRange(i + 2, 6, 1, 5).clearContent();
+      // 처리 결과 표기
+      sheet.getRange(i + 2, resultColIdx + 1).setValue(`✅ 완료 (파일 ${fileCount}개, 폴더 ${folderCount}개 이동 후 원본 삭제)`);
+
+      movedFolderCount++;
+      totalMovedFiles += fileCount;
+      totalMovedFolders += folderCount;
+
+      Logger.log(`[DriveManager] 폴더 이동 성공: ${sourceLevels.join('/')} -> ${targetLevels.join('/')} (파일: ${fileCount}개, 폴더: ${folderCount}개)`);
+    } catch (e) {
+      Logger.log(`[DriveManager] 폴더 이동 실패 (${sourceLevels.join('/')} -> ${targetLevels.join('/')}): ${e}`);
+      sheet.getRange(i + 2, resultColIdx + 1).setValue(`오류: ${e}`);
+    }
+  }
+
+  SpreadsheetApp.flush();
+  let resultMsg = '';
+  if (deletedFolderCount > 0 && movedFolderCount > 0) {
+    resultMsg = `✅ 폴더 이동 ${movedFolderCount}건, 폴더 삭제 ${deletedFolderCount}건 완료`;
+  } else if (deletedFolderCount > 0) {
+    resultMsg = `✅ 총 ${deletedFolderCount}개 폴더 삭제 완료`;
+  } else {
+    resultMsg = `✅ 총 ${movedFolderCount}개 폴더 이동 완료 (파일 ${totalMovedFiles}개, 하위폴더 ${totalMovedFolders}개 이동)`;
+  }
+
+  ss.toast(resultMsg, '폴더 일괄 변경 완료');
+  Logger.log(`[DriveManager] ${resultMsg}`);
 }
