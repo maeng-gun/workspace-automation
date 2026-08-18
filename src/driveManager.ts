@@ -332,23 +332,56 @@ function batchMoveFolders() {
   }
 
   const lastCol = Math.max(sheet.getLastColumn(), 12);
-  const headers = sheet.getRange(1, 1, 1, lastCol).getValues()[0].map(h => String(h || '').trim());
+  const rawHeaders = sheet.getRange(1, 1, 1, lastCol).getValues()[0];
+  const headers = rawHeaders.map(h => String(h || '').trim());
 
-  // '삭제/생성' (또는 기존 '삭제여부') 열 인덱스 확인 (0-based)
+  // 1. '삭제/생성' (또는 기존 '삭제여부') 열 인덱스 확인 (0-based)
   let flagColIdx = headers.indexOf('삭제/생성');
   if (flagColIdx === -1) {
     flagColIdx = headers.indexOf('삭제여부');
   }
   if (flagColIdx === -1) {
+    flagColIdx = headers.findIndex(h => h.includes('삭제') || h.includes('생성'));
+  }
+  if (flagColIdx === -1) {
     flagColIdx = 10; // 기본 11번째 열 (Col 11)
+  }
+
+  // 2. '레벨1' ~ '레벨5' (현재/원본 폴더 계층) 열 인덱스 확인
+  let sourceIndices: number[] = [];
+  const sourceNames = ['레벨1', '레벨2', '레벨3', '레벨4', '레벨5'];
+  sourceNames.forEach(name => {
+    const idx = headers.indexOf(name);
+    if (idx !== -1) sourceIndices.push(idx);
+  });
+  if (sourceIndices.length < 5) {
+    sourceIndices = [0, 1, 2, 3, 4].filter(idx => idx !== flagColIdx);
+  }
+
+  // 3. 'LV1' ~ 'LV5' (이동/생성 대상 폴더 계층) 열 인덱스 확인
+  let targetIndices: number[] = [];
+  const targetNames = ['LV1', 'LV2', 'LV3', 'LV4', 'LV5'];
+  targetNames.forEach(name => {
+    const idx = headers.indexOf(name);
+    if (idx !== -1) targetIndices.push(idx);
+  });
+  if (targetIndices.length < 5) {
+    for (let c = 0; c < headers.length; c++) {
+      if (c !== flagColIdx && !sourceIndices.includes(c)) {
+        targetIndices.push(c);
+      }
+    }
+    targetIndices = targetIndices.slice(0, 5);
   }
 
   // '처리 결과' 열 인덱스 확인 및 헤더 생성
   let resultColIdx = headers.findIndex(h => h.includes('결과') || h.includes('상태'));
   if (resultColIdx === -1) {
-    resultColIdx = Math.max(flagColIdx + 1, 11);
+    resultColIdx = Math.max(flagColIdx + 1, lastCol);
     sheet.getRange(1, resultColIdx + 1).setValue('처리 결과').setFontWeight('bold').setBackground('#e6f2ff');
   }
+
+  Logger.log(`[DriveManager] 열 인식 결과 -> 삭제/생성 열: ${flagColIdx + 1}, 원본레벨 열: [${sourceIndices.map(i => i + 1).join(', ')}], 목표레벨 열: [${targetIndices.map(i => i + 1).join(', ')}], 결과 열: ${resultColIdx + 1}`);
 
   const totalCols = Math.max(lastCol, resultColIdx + 1);
   const range = sheet.getRange(2, 1, lastRow - 1, totalCols);
@@ -363,14 +396,14 @@ function batchMoveFolders() {
   for (let i = 0; i < values.length; i++) {
     const row = values[i];
 
-    // 현재 레벨 1~5 (Col 1~5)
-    const sourceLevels = [row[0], row[1], row[2], row[3], row[4]]
-      .map(v => String(v || '').trim())
+    // 현재/원본 레벨 1~5
+    const sourceLevels = sourceIndices
+      .map(idx => String(row[idx] || '').trim())
       .filter(v => v !== '');
 
-    // 목표 레벨 LV1~LV5 (Col 6~10)
-    const targetLevels = [row[5], row[6], row[7], row[8], row[9]]
-      .map(v => String(v || '').trim())
+    // 목표/생성 레벨 LV1~LV5
+    const targetLevels = targetIndices
+      .map(idx => String(row[idx] || '').trim())
       .filter(v => v !== '');
 
     // 삭제/생성 값 확인
@@ -409,7 +442,7 @@ function batchMoveFolders() {
 
     // ==========================================
     // 2. [폴더 생성 모드] (삭제/생성 == '2')
-    // 레벨1~레벨5 열의 내용은 무시하고 LV1~LV5 대상 폴더 생성 (이미 존재 시 건너뛰기)
+    // 레벨1~레벨5 열의 내용은 무시하고 LV1~LV5 경로 대상 폴더를 루트(LV0) 직하위부터 생성 (이미 존재 시 건너뛰기)
     // ==========================================
     if (flagVal === '2') {
       if (targetLevels.length === 0) {
@@ -502,9 +535,13 @@ function batchMoveFolders() {
         targetLevels[4] || ''
       ];
       // 레벨1~5 갱신
-      sheet.getRange(i + 2, 1, 1, 5).setValues([newLevels]);
+      sourceIndices.forEach((colIdx, idx) => {
+        sheet.getRange(i + 2, colIdx + 1).setValue(newLevels[idx] || '');
+      });
       // LV1~5 초기화
-      sheet.getRange(i + 2, 6, 1, 5).clearContent();
+      targetIndices.forEach(colIdx => {
+        sheet.getRange(i + 2, colIdx + 1).clearContent();
+      });
       // 처리 결과 표기
       sheet.getRange(i + 2, resultColIdx + 1).setValue(`✅ 완료 (파일 ${fileCount}개, 폴더 ${folderCount}개 이동 후 원본 삭제)`);
 
