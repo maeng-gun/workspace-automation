@@ -306,22 +306,14 @@ function moveDriveFiles() {
 }
 
 /**
- * 4. 폴더 일괄 변경 및 삭제 기능
+ * 4. 폴더 일괄 변경 (삭제/이동/생성) 기능
  * 대상 탭: [폴더일괄변경]
  * - Col 1~5: 레벨1 ~ 레벨5 (현재 폴더 계층)
- * - Col 6~10: LV1 ~ LV5 (이동할 폴더 계층)
- * - 삭제여부 열: 1 입력 시 해당 폴더 계층 및 하위 파일/폴더 전체 삭제
- * 
- * 동작:
- * 1) [삭제여부 == '1']인 경우:
- *    - 레벨1~레벨5 경로의 폴더(하위 파일 및 서브폴더 전체 포함)를 휴지통으로 이동
- *    - 삭제여부 열을 '삭제완료'로 변경
- * 2) [삭제여부 != '1']인 경우 (이동):
- *    - 레벨1~레벨5 경로의 원본 폴더를 탐색
- *    - LV1~LV5 경로의 대상 폴더를 탐색 (없으면 자동 생성)
- *    - 원본 폴더 내의 모든 파일과 하위 폴더들을 대상 폴더로 일괄 이동
- *    - 내용물이 비워진 원본 폴더(마지막 계층 폴더)를 휴지통으로 이동(삭제)
- *    - 시트의 레벨1~5 갱신, LV1~5 초기화, 처리 결과 기록
+ * - Col 6~10: LV1 ~ LV5 (이동/생성할 폴더 계층)
+ * - 삭제/생성 열 (Col 11): 
+ *    - '1': 해당 폴더 계층 및 하위 파일/폴더 전체 삭제 (휴지통 이동)
+ *    - '2': '생성' 모드. LV1~LV5 경로의 대상 폴더를 생성 (이미 존재하는 경우 스킵, 레벨1~레벨5 열 무시)
+ *    - 그 외 ('1' 또는 '2'가 아닌 경우): '이동' 모드. 레벨1~레벨5 원본 폴더 내용물을 LV1~LV5 대상 폴더로 이동 후 원본 폴더 삭제
  */
 function batchMoveFolders() {
   const ss = getTargetSpreadsheet();
@@ -342,16 +334,19 @@ function batchMoveFolders() {
   const lastCol = Math.max(sheet.getLastColumn(), 12);
   const headers = sheet.getRange(1, 1, 1, lastCol).getValues()[0].map(h => String(h || '').trim());
 
-  // '삭제여부' 열 인덱스 확인 (0-based)
-  let deleteColIdx = headers.indexOf('삭제여부');
-  if (deleteColIdx === -1) {
-    deleteColIdx = 10; // 기본 11번째 열 (Col 11)
+  // '삭제/생성' (또는 기존 '삭제여부') 열 인덱스 확인 (0-based)
+  let flagColIdx = headers.indexOf('삭제/생성');
+  if (flagColIdx === -1) {
+    flagColIdx = headers.indexOf('삭제여부');
+  }
+  if (flagColIdx === -1) {
+    flagColIdx = 10; // 기본 11번째 열 (Col 11)
   }
 
   // '처리 결과' 열 인덱스 확인 및 헤더 생성
   let resultColIdx = headers.findIndex(h => h.includes('결과') || h.includes('상태'));
   if (resultColIdx === -1) {
-    resultColIdx = Math.max(deleteColIdx + 1, 11);
+    resultColIdx = Math.max(flagColIdx + 1, 11);
     sheet.getRange(1, resultColIdx + 1).setValue('처리 결과').setFontWeight('bold').setBackground('#e6f2ff');
   }
 
@@ -360,6 +355,7 @@ function batchMoveFolders() {
   const values = range.getValues();
 
   let movedFolderCount = 0;
+  let createdFolderCount = 0;
   let deletedFolderCount = 0;
   let totalMovedFiles = 0;
   let totalMovedFolders = 0;
@@ -377,18 +373,16 @@ function batchMoveFolders() {
       .map(v => String(v || '').trim())
       .filter(v => v !== '');
 
-    // 삭제여부 값 확인
-    const deleteFlag = String(row[deleteColIdx] || '').trim();
-
-    // 레벨이 비어있으면 스킵
-    if (sourceLevels.length === 0) {
-      continue;
-    }
+    // 삭제/생성 값 확인
+    const flagVal = String(row[flagColIdx] || '').trim();
 
     // ==========================================
-    // 1. [폴더 전체 삭제 모드] (삭제여부 == '1')
+    // 1. [폴더 전체 삭제 모드] (삭제/생성 == '1')
     // ==========================================
-    if (deleteFlag === '1') {
+    if (flagVal === '1') {
+      if (sourceLevels.length === 0) {
+        continue;
+      }
       try {
         const sourceFolder = findFolderByPath(sourceLevels);
         if (!sourceFolder) {
@@ -402,7 +396,7 @@ function batchMoveFolders() {
         deletedFolderCount++;
 
         // 시트 상태 갱신
-        sheet.getRange(i + 2, deleteColIdx + 1).setValue('삭제완료');
+        sheet.getRange(i + 2, flagColIdx + 1).setValue('삭제완료');
         sheet.getRange(i + 2, resultColIdx + 1).setValue('✅ 폴더 및 하위 항목 전체 삭제 완료');
 
         Logger.log(`[DriveManager] 폴더 일괄 삭제 성공: ${sourceLevels.join('/')}`);
@@ -414,9 +408,41 @@ function batchMoveFolders() {
     }
 
     // ==========================================
-    // 2. [폴더 내용물 이동 모드]
+    // 2. [폴더 생성 모드] (삭제/생성 == '2')
+    // 레벨1~레벨5 열의 내용은 무시하고 LV1~LV5 대상 폴더 생성 (이미 존재 시 건너뛰기)
     // ==========================================
-    if (targetLevels.length === 0) {
+    if (flagVal === '2') {
+      if (targetLevels.length === 0) {
+        sheet.getRange(i + 2, resultColIdx + 1).setValue('오류: 생성 대상 경로(LV1~LV5) 없음');
+        continue;
+      }
+
+      try {
+        const existingFolder = findFolderByPath(targetLevels);
+        if (existingFolder) {
+          sheet.getRange(i + 2, resultColIdx + 1).setValue('이미 존재함 (스킵)');
+          Logger.log(`[DriveManager] 폴더 생성 스킵 (이미 존재): ${targetLevels.join('/')}`);
+          continue;
+        }
+
+        getOrCreateFolderPath(targetLevels);
+        createdFolderCount++;
+
+        sheet.getRange(i + 2, flagColIdx + 1).setValue('생성완료');
+        sheet.getRange(i + 2, resultColIdx + 1).setValue('✅ 폴더 생성 완료');
+
+        Logger.log(`[DriveManager] 폴더 생성 성공: ${targetLevels.join('/')}`);
+      } catch (e) {
+        Logger.log(`[DriveManager] 폴더 생성 실패 (${targetLevels.join('/')}): ${e}`);
+        sheet.getRange(i + 2, resultColIdx + 1).setValue(`오류: ${e}`);
+      }
+      continue;
+    }
+
+    // ==========================================
+    // 3. [폴더 내용물 이동 모드] (삭제/생성 != '1' && != '2')
+    // ==========================================
+    if (sourceLevels.length === 0 || targetLevels.length === 0) {
       continue;
     }
 
@@ -494,15 +520,19 @@ function batchMoveFolders() {
   }
 
   SpreadsheetApp.flush();
+  const summaryParts: string[] = [];
+  if (createdFolderCount > 0) summaryParts.push(`폴더 생성 ${createdFolderCount}건`);
+  if (movedFolderCount > 0) summaryParts.push(`폴더 이동 ${movedFolderCount}건`);
+  if (deletedFolderCount > 0) summaryParts.push(`폴더 삭제 ${deletedFolderCount}건`);
+
   let resultMsg = '';
-  if (deletedFolderCount > 0 && movedFolderCount > 0) {
-    resultMsg = `✅ 폴더 이동 ${movedFolderCount}건, 폴더 삭제 ${deletedFolderCount}건 완료`;
-  } else if (deletedFolderCount > 0) {
-    resultMsg = `✅ 총 ${deletedFolderCount}개 폴더 삭제 완료`;
+  if (summaryParts.length > 0) {
+    resultMsg = `✅ ${summaryParts.join(', ')} 완료`;
   } else {
-    resultMsg = `✅ 총 ${movedFolderCount}개 폴더 이동 완료 (파일 ${totalMovedFiles}개, 하위폴더 ${totalMovedFolders}개 이동)`;
+    resultMsg = `✅ 처리 완료 (변경 항목 없음 또는 스킵)`;
   }
 
   ss.toast(resultMsg, '폴더 일괄 변경 완료');
   Logger.log(`[DriveManager] ${resultMsg}`);
 }
+
