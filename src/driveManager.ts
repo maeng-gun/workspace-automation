@@ -26,57 +26,96 @@ function getTargetSpreadsheet(): GoogleAppsScript.Spreadsheet.Spreadsheet {
 }
 
 /**
- * 1. 전체 파일 목록 생성 (100개 청크 단위 기록)
- * 대상 탭: [현재 파일]
+ * 1. 전체 파일 목록 및 폴더 목록 생성 (100개 청크 단위 기록)
+ * 대상 탭:
+ * - [현재 파일]: 전체 파일 목록 생성 (11개 열: 레벨1~5)
+ * - [현재 폴더]: 최하위(리프) 폴더 기준 전체 폴더 계층 생성 (7개 열: 레벨1~7)
  */
 function generateDriveFileList() {
   const ss = getTargetSpreadsheet();
-  let sheet = ss.getSheetByName('현재 파일');
 
-  if (!sheet) {
-    sheet = ss.insertSheet('현재 파일');
+  // ==========================================
+  // 1) [현재 파일] 탭 설정 및 데이터 초기화
+  // ==========================================
+  let fileSheet = ss.getSheetByName('현재 파일');
+  if (!fileSheet) {
+    fileSheet = ss.insertSheet('현재 파일');
     Logger.log('[DriveManager] [현재 파일] 탭이 없어 새로 생성했습니다.');
   }
 
-  // 1. 헤더 설정 확인/작성 (11개 열)
-  const headers = [
+  const fileHeaders = [
     ['파일명', '파일 URL', '파일 종류', '용량(MB)', '최종 수정일', '파일ID', '레벨1', '레벨2', '레벨3', '레벨4', '레벨5']
   ];
-  sheet.getRange(1, 1, 1, 11).setValues(headers);
-  sheet.getRange(1, 1, 1, 11).setFontWeight('bold').setBackground('#e6f2ff');
+  fileSheet.getRange(1, 1, 1, 11).setValues(fileHeaders);
+  fileSheet.getRange(1, 1, 1, 11).setFontWeight('bold').setBackground('#e6f2ff');
 
-  // 2. 기존 데이터 영역 초기화 (2행부터)
-  const lastRow = sheet.getLastRow();
-  if (lastRow > 1) {
-    sheet.getRange(2, 1, lastRow - 1, 11).clearContent();
+  const fileLastRow = fileSheet.getLastRow();
+  if (fileLastRow > 1) {
+    fileSheet.getRange(2, 1, fileLastRow - 1, 11).clearContent();
   }
 
-  Logger.log('[DriveManager] 전체 파일 목록 탐색 시작...');
-  const toastMessage = (msg: string) => ss.toast(msg, '드라이브 동기화', 5);
-  toastMessage('구글 드라이브 전체 파일 목록 탐색을 시작합니다...');
+  // ==========================================
+  // 2) [현재 폴더] 탭 설정 및 데이터 초기화
+  // ==========================================
+  let folderSheet = ss.getSheetByName('현재 폴더');
+  if (!folderSheet) {
+    folderSheet = ss.insertSheet('현재 폴더');
+    Logger.log('[DriveManager] [현재 폴더] 탭이 없어 새로 생성했습니다.');
+  }
 
-  let chunk: (string | number)[][] = [];
-  let currentRow = 2;
-  let totalProcessed = 0;
+  const folderHeaders = [
+    ['레벨1', '레벨2', '레벨3', '레벨4', '레벨5', '레벨6', '레벨7']
+  ];
+  folderSheet.getRange(1, 1, 1, 7).setValues(folderHeaders);
+  folderSheet.getRange(1, 1, 1, 7).setFontWeight('bold').setBackground('#e6f2ff');
+
+  const folderLastRow = folderSheet.getLastRow();
+  if (folderLastRow > 1) {
+    folderSheet.getRange(2, 1, folderLastRow - 1, 7).clearContent();
+  }
+
+  Logger.log('[DriveManager] 전체 파일 및 폴더 목록 탐색 시작...');
+  const toastMessage = (msg: string) => ss.toast(msg, '드라이브 동기화', 5);
+  toastMessage('구글 드라이브 파일 및 폴더 목록 탐색을 시작합니다...');
+
   const CHUNK_SIZE = 100;
 
-  const flushChunk = () => {
-    if (chunk.length === 0) return;
-    sheet.getRange(currentRow, 1, chunk.length, 11).setValues(chunk);
-    currentRow += chunk.length;
-    totalProcessed += chunk.length;
-    chunk = [];
+  // [현재 파일] 청크 관리
+  let fileChunk: (string | number)[][] = [];
+  let fileCurrentRow = 2;
+  let totalFilesProcessed = 0;
+
+  const flushFileChunk = () => {
+    if (fileChunk.length === 0) return;
+    fileSheet.getRange(fileCurrentRow, 1, fileChunk.length, 11).setValues(fileChunk);
+    fileCurrentRow += fileChunk.length;
+    totalFilesProcessed += fileChunk.length;
+    fileChunk = [];
     SpreadsheetApp.flush();
-    toastMessage(`현재 ${totalProcessed}개 파일 기록 중...`);
-    Logger.log(`[DriveManager] ${totalProcessed}개 파일 시트 작성 완료.`);
+    toastMessage(`현재 파일 ${totalFilesProcessed}개 기록 중...`);
+    Logger.log(`[DriveManager] ${totalFilesProcessed}개 파일 시트 작성 완료.`);
   };
 
-  // 재귀 탐색 함수
+  // [현재 폴더] 청크 관리
+  let folderChunk: string[][] = [];
+  let folderCurrentRow = 2;
+  let totalFoldersProcessed = 0;
+
+  const flushFolderChunk = () => {
+    if (folderChunk.length === 0) return;
+    folderSheet.getRange(folderCurrentRow, 1, folderChunk.length, 7).setValues(folderChunk);
+    folderCurrentRow += folderChunk.length;
+    totalFoldersProcessed += folderChunk.length;
+    folderChunk = [];
+    SpreadsheetApp.flush();
+    Logger.log(`[DriveManager] ${totalFoldersProcessed}개 폴더 시트 작성 완료.`);
+  };
+
+  // 파일 레코드 추가
   const processFile = (file: GoogleAppsScript.Drive.File, pathLevels: string[]) => {
     const sizeInMB = (file.getSize() / (1024 * 1024)).toFixed(2);
     const lastUpdated = Utilities.formatDate(file.getLastUpdated(), Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm:ss');
 
-    // 5단계 레벨 구성
     const level1 = pathLevels[0] || '';
     const level2 = pathLevels[1] || '';
     const level3 = pathLevels[2] || '';
@@ -97,12 +136,30 @@ function generateDriveFileList() {
       level5
     ];
 
-    chunk.push(row);
-    if (chunk.length >= CHUNK_SIZE) {
-      flushChunk();
+    fileChunk.push(row);
+    if (fileChunk.length >= CHUNK_SIZE) {
+      flushFileChunk();
     }
   };
 
+  // 최하위(리프) 폴더 레코드 추가
+  const recordLeafFolder = (pathLevels: string[]) => {
+    const row = [
+      pathLevels[0] || '',
+      pathLevels[1] || '',
+      pathLevels[2] || '',
+      pathLevels[3] || '',
+      pathLevels[4] || '',
+      pathLevels[5] || '',
+      pathLevels[6] || ''
+    ];
+    folderChunk.push(row);
+    if (folderChunk.length >= CHUNK_SIZE) {
+      flushFolderChunk();
+    }
+  };
+
+  // 재귀 탐색 함수 (최대 7단계 깊이 제한)
   const traverseFolder = (folder: GoogleAppsScript.Drive.Folder, currentPath: string[]) => {
     const folderName = folder.getName();
     if (EXCLUDED_FOLDERS.includes(folderName)) {
@@ -110,14 +167,15 @@ function generateDriveFileList() {
       return;
     }
 
-    // 현재 폴더 직하위 파일 탐색
+    // 1) 현재 폴더 직하위 파일 탐색
     const files = folder.getFiles();
     while (files.hasNext()) {
       processFile(files.next(), currentPath);
     }
 
-    // 하위 폴더 재귀 탐색 (최대 5단계 깊이 제한)
-    if (currentPath.length < 5) {
+    // 2) 하위 폴더 수집
+    const validSubFolders: GoogleAppsScript.Drive.Folder[] = [];
+    if (currentPath.length < 7) {
       const subFolders = folder.getFolders();
       while (subFolders.hasNext()) {
         const subFolder = subFolders.next();
@@ -126,20 +184,31 @@ function generateDriveFileList() {
           Logger.log(`[DriveManager] 제외된 폴더 스킵: ${subFolderName}`);
           continue;
         }
-        traverseFolder(subFolder, [...currentPath, subFolderName]);
+        validSubFolders.push(subFolder);
+      }
+    }
+
+    // 3) 더 이상 하위 폴더가 없는 최하위(리프) 폴더인 경우 [현재 폴더] 탭에 한 행 추가
+    if (validSubFolders.length === 0 && currentPath.length > 0) {
+      recordLeafFolder(currentPath);
+    } else {
+      // 하위 폴더가 존재하면 재귀 탐색
+      for (const subFolder of validSubFolders) {
+        traverseFolder(subFolder, [...currentPath, subFolder.getName()]);
       }
     }
   };
 
-  // 드라이브 루트부터 시작
+  // 드라이브 루트부터 탐색 시작
   const rootFolder = DriveApp.getRootFolder();
   traverseFolder(rootFolder, []);
 
   // 남은 청크 플러시
-  flushChunk();
+  flushFileChunk();
+  flushFolderChunk();
 
-  Logger.log(`[DriveManager] 파일 목록 생성 완료! 총 ${totalProcessed}개 파일.`);
-  toastMessage(`✅ 탐색 완료! 총 ${totalProcessed}개의 파일 목록을 생성했습니다.`);
+  Logger.log(`[DriveManager] 파일 및 폴더 목록 생성 완료! 파일 ${totalFilesProcessed}개, 최하위 폴더 ${totalFoldersProcessed}개.`);
+  toastMessage(`✅ 탐색 완료! 파일 ${totalFilesProcessed}개, 폴더 ${totalFoldersProcessed}개의 목록을 생성했습니다.`);
 }
 
 /**
